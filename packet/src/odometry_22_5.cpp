@@ -28,8 +28,11 @@ double dx;     // displacament of rover
 double Xx, Xy;  //  displacament vectors
 double v;     // linear velocity of rover
 double Vx, Vy;  //  velocity vectors
-double dt;    // change in time
-double yaw;   // change in angle according to initial position
+double dt;    // change in time (in seconds)
+double init_yaw; // init yaw 
+double yaw;   // change in angle according to initial position (in degrees)
+double yaw1;  // change in angle according to magnetic east (in radians)
+double dyaw;   // change in angle according to initial position (in radians)
 double w;     // angular velocity
 float err;    //  experimental
 
@@ -37,9 +40,11 @@ double av_rpm;
 double av_right_rpm;
 double av_left_rpm;
 
+bool flag;
+
 namespace calc
 {
-    double displacament(float r, double rpm, double angle) //  calculation function
+    double displacament(float r, double rpm, double angle)
     {
         double circum = CIRCUM(r);
         dt = (ros::Time::now() - last_time).toSec();
@@ -56,12 +61,15 @@ namespace calc
     {
         v = dx/dt;
         Vx = v*cos(angle);
-        Vy = v*sin(angle);
 
-        return v, Vx, Vy;
+        return v, Vx;
     }
 
     float error()
+    /**
+     * @brief calculates error, just for fun. UNUSED
+     * TODO: error değeri kullanılarak farklı yüzeylerde yemre katsayısını dinamik olarak düzenleyen bir kod geliştirilebilir...
+     */
     {
         w = w + (((av_left_rpm-av_right_rpm)/60)/1.1)*dt;  // W info from wheel
         err = (abs(yaw/dt - w)*100)/yaw;                 // Error percentege (according to w info given by imu)
@@ -90,7 +98,7 @@ namespace node
         odom.pose.pose.orientation.z = imu.orientation.z;
     
         odom.twist.twist.linear.x = Vx;
-        odom.twist.twist.linear.y = Vy;
+        odom.twist.twist.linear.y = 0.0;
         odom.twist.twist.linear.z = 0.0;
 
         odom.twist.twist.angular.x = 0.0;
@@ -100,24 +108,41 @@ namespace node
         pub_odom.publish(odom);
     }
 
-    void imu_cb(const sensor_msgs::Imu::ConstPtr& aq)
+    void imu_cb(const sensor_msgs::Imu::ConstPtr& ip)
     {
-        imu = *aq;
+        imu = *ip;
         tf::Quaternion q(imu.orientation.x, imu.orientation.y,
                         imu.orientation.z, imu.orientation.w);
         tf::Matrix3x3 m(q);
         double roll,pitch,yaw1;
         m.getRPY(roll, pitch, yaw1);
-        yaw = yaw1*(180/M_PI);
+
+        if (flag == 0)  // for calculate beginning yaw
+        {
+            double yaws;
+
+            for(int i=0; i<5; i++)
+            {
+                yaws = yaws + yaw1;
+            }
+            init_yaw = yaws/5 + M_PI/2;
+            flag == 1;
+        }
+
+        else
+        {
+        dyaw = (yaw1 - init_yaw) + M_PI/2;    // calculate yaw change and magnetic east to magnetic north
+        yaw = dyaw*(180/M_PI);  // Radians to degrees
         ROS_INFO("%f",yaw);
+        }
     }
 
-    void hall_cb(const std_msgs::Float64MultiArray::ConstPtr& aw)
+    void hall_cb(const std_msgs::Float64MultiArray::ConstPtr& hp)
     {
-        hall = *aw;
+        hall = *hp;
+        av_rpm = (hall.data[0]+hall.data[1]+hall.data[2]+hall.data[3])/4; //    Avereage rpm of wheels
         av_right_rpm = (hall.data[0]+hall.data[1])/2;   //  Avereage rpm of right wheels
         av_left_rpm = (hall.data[2]+hall.data[3])/2;    //  Avereage rpm of left wheels
-        av_rpm = (hall.data[0]+hall.data[1]+hall.data[2]+hall.data[3])/4; //    Avereage rpm of wheels
     }
 }
 
@@ -126,20 +151,20 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "odometrilamasyon");
     ros::NodeHandle nh;
     ros::Rate loop_rate(100);
-    ros::Subscriber sub_imu = nh.subscribe("/mavros/imu/data", 100, node::imu_cb);
+    ros::Subscriber sub_imu = nh.subscribe("imu1/data", 100, node::imu_cb);
     ros::Subscriber sub_hall = nh.subscribe("/drive_feedback_topic", 100, node::hall_cb);
     pub_odom = nh.advertise<nav_msgs::Odometry>("/drive_system/odometry_info",100);
+    last_time = ros::Time::now();
 
     while(ros::ok())
     {
         try 
         {
-            calc::displacament(0.14, av_rpm, yaw);
-            calc::velocity(yaw);
-            calc::error;
+            calc::displacament(0.14, av_rpm, dyaw);
+            calc::velocity(dyaw);
+            calc::error();
             ROS_INFO("error percentage is ", "%c", "%f", '%', err);
             node::odometry_publisher();
-            //TODO: error değeri kullanılarak farklı yüzeylerde yemre katsayısını dinamik olarak düzenleyen bir kod geliştirilebilir..
         }
 
         catch (const exception& e) 
