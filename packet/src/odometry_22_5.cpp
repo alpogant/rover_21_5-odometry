@@ -40,7 +40,8 @@ double av_rpm;
 double av_right_rpm;
 double av_left_rpm;
 
-bool flag;
+bool flag = false;  //for imu init value
+int dir;   // 0 straight, 1 right, 2 left
 
 namespace calc
 {
@@ -50,16 +51,17 @@ namespace calc
         dt = (ros::Time::now() - last_time).toSec();
         last_time = ros::Time::now();
 
-        dx = dx + circum*(rpm/60);
+        dx = dx + circum*rpm/60;
         Xx = dx*cos(angle);
         Xy = dx*sin(angle);
 
         return dx, Xx, Xy;
     }
 
-    double velocity(double angle)
+    double velocity(float r, double rpm, double angle)
     {
-        v = dx/dt;
+        double ddx = CIRCUM(r)*rpm/60;
+        v = ddx/dt;
         Vx = v*cos(angle);
 
         return v, Vx;
@@ -117,7 +119,7 @@ namespace node
         double roll,pitch,yaw1;
         m.getRPY(roll, pitch, yaw1);
 
-        if (flag == 0)  // for calculate beginning yaw
+        if (flag == false)  // for calculate beginning yaw
         {
             double yaws;
 
@@ -126,14 +128,16 @@ namespace node
                 yaws = yaws + yaw1;
             }
             init_yaw = yaws/5 + M_PI/2;
-            flag == 1;
+
+		    // ROS_INFO("%f",init_yaw);
+            flag = true;
         }
 
         else
         {
-        dyaw = (yaw1 - init_yaw) + M_PI/2;    // calculate yaw change and magnetic east to magnetic north
-        yaw = dyaw*(180/M_PI);  // Radians to degrees
-        ROS_INFO("%f",yaw);
+        	dyaw = (yaw1 - init_yaw) + M_PI/2;    // calculate yaw change and magnetic east to magnetic north
+        	yaw = dyaw*(180/M_PI);  // Radians to degrees
+            // ROS_INFO("%f",yaw);
         }
     }
 
@@ -143,6 +147,21 @@ namespace node
         av_rpm = (hall.data[0]+hall.data[1]+hall.data[2]+hall.data[3])/4; //    Avereage rpm of wheels
         av_right_rpm = (hall.data[0]+hall.data[1])/2;   //  Avereage rpm of right wheels
         av_left_rpm = (hall.data[2]+hall.data[3])/2;    //  Avereage rpm of left wheels
+
+        if ((av_left_rpm - av_right_rpm) < 5)
+        {
+            dir = 2;
+        }
+
+        else if ((av_right_rpm - av_left_rpm) < 5)
+        {
+            dir = 1;
+        }
+
+        else
+        {
+            dir = 0;
+        }
     }
 }
 
@@ -160,10 +179,10 @@ int main(int argc, char **argv)
     {
         try 
         {
-            calc::displacament(0.14, av_rpm, dyaw);
-            calc::velocity(dyaw);
+            calc::displacament(0.125, av_rpm, dyaw);
+            calc::velocity(0.125, av_rpm, dyaw);
             calc::error();
-            ROS_INFO("error percentage is ", "%c", "%f", '%', err);
+            //ROS_INFO("error percentage is ", "%f", err);
             node::odometry_publisher();
         }
 
@@ -174,6 +193,7 @@ int main(int argc, char **argv)
         }
         ros::spinOnce();
         loop_rate.sleep();
+
     }
     return 0;
 }
